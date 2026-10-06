@@ -1,0 +1,238 @@
+'use client';
+
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import '@/styles/leaflet-dark.css';
+import { icon } from 'leaflet';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Plus } from 'lucide-react';
+import AddGistModal from './AddGistModal';
+import { motion, AnimatePresence } from 'framer-motion';
+import { postGist, GistApiError } from '@/api/gists';
+
+export interface Gist {
+  id: string | number;
+  content: string;
+  lat: number;
+  lng: number;
+  status?: 'pending' | 'delivered' | 'error';
+}
+
+const greenIcon = icon({
+  iconUrl:
+    'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+  shadowUrl:
+    'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+});
+
+const blueIcon = icon({
+  iconUrl:
+    'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
+  shadowUrl:
+    'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+});
+
+function ChangeView({
+  center,
+  zoom,
+}: {
+  center: [number, number];
+  zoom: number;
+}) {
+  const map = useMap();
+  useEffect(() => {
+    map.flyTo(center, zoom);
+  }, [map, center, zoom]);
+  return null;
+}
+
+export default function Map() {
+  const [position, setPosition] = useState<[number, number]>([6.5244, 3.3792]);
+  const [gists, setGists] = useState<Gist[]>([
+    {
+      id: 1,
+      content: 'Amazing suya spot just opened here!',
+      lat: 6.52,
+      lng: 3.37,
+    },
+    {
+      id: 2,
+      content: 'Heads up, major traffic on this bridge.',
+      lat: 6.53,
+      lng: 3.38,
+    },
+  ]);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [locationAnnouncement, setLocationAnnouncement] = useState('');
+
+  useEffect(() => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        setPosition([latitude, longitude]);
+        setLocationAnnouncement(
+          `Map centered on ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`
+        );
+      },
+      (err) => {
+        console.warn(`Geolocation Error (${err.code}): ${err.message}`);
+      }
+    );
+  }, []);
+
+  const [toast, setToast] = useState<{
+    message: string;
+    type: 'success' | 'error';
+  } | null>(null);
+
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clean up the toast timer on unmount
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+
+  const showToast = useCallback(
+    (message: string, type: 'success' | 'error') => {
+      // Clear any existing timer before setting a new one
+      if (toastTimerRef.current !== null) {
+        clearTimeout(toastTimerRef.current);
+      }
+      setToast({ message, type });
+      toastTimerRef.current = setTimeout(() => {
+        toastTimerRef.current = null;
+        setToast(null);
+      }, 4000);
+    },
+    [],
+  );
+
+  const handleAddGist = useCallback(
+    async (content: string) => {
+      // Create an optimistic gist with a temporary client-side id
+      const tempId = `optimistic-${Date.now()}`;
+      const optimisticGist: Gist = {
+        id: tempId,
+        content,
+        lat: position[0],
+        lng: position[1],
+        status: 'pending',
+      };
+
+      // Optimistic insert — add immediately to local state
+      setGists((prevGists) => [...prevGists, optimisticGist]);
+
+      try {
+        const serverGist = await postGist({
+          content,
+          lat: position[0],
+          lon: position[1],
+        });
+
+        // Replace the optimistic entry with the server-confirmed one
+        setGists((prevGists) =>
+          prevGists.map((g) =>
+            g.id === tempId
+              ? {
+                  id: serverGist.id,
+                  content: serverGist.content,
+                  lat: serverGist.lat,
+                  lng: serverGist.lon,
+                  status: 'delivered' as const,
+                }
+              : g,
+          ),
+        );
+
+        showToast('Gist pinned successfully!', 'success');
+      } catch (err) {
+        // Rollback — remove the optimistic entry on error
+        setGists((prevGists) =>
+          prevGists.filter((g) => g.id !== tempId),
+        );
+
+        const message =
+          err instanceof GistApiError
+            ? err.message
+            : 'Network error — please try again.';
+        showToast(message, 'error');
+      }
+    },
+    [position, showToast],
+  );
+
+  return (
+    <div className="relative h-full w-full">
+      <div aria-live="polite" role="status" className="sr-only">
+        {locationAnnouncement}
+      </div>
+      <MapContainer center={position} zoom={14} className="h-full w-full">
+        <ChangeView center={position} zoom={14} />
+        <TileLayer
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        />
+        <Marker position={position} icon={greenIcon}>
+          <Popup>Your Current Location</Popup>
+        </Marker>
+        {gists.map((gist) => (
+          <Marker key={gist.id} position={[gist.lat, gist.lng]} icon={blueIcon}>
+            <Popup>{gist.content}</Popup>
+          </Marker>
+        ))}
+      </MapContainer>
+
+      {/* Toast notification */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 50 }}
+            role="alert"
+            aria-live="assertive"
+            className={`absolute bottom-6 left-1/2 -translate-x-1/2 z-[2000] px-6 py-3 rounded-lg shadow-xl text-white font-medium text-sm ${
+              toast.type === 'success'
+                ? 'bg-green-600'
+                : 'bg-red-600'
+            }`}
+          >
+            {toast.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <motion.button
+        onClick={() => setIsModalOpen(true)}
+        // 3. Animation props for pulsing effect
+        animate={{ scale: [1, 1.1, 1] }}
+        transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
+        className="absolute top-1/2 left-8 -translate-y-1/2 z-[1000] flex items-center justify-center w-16 h-16  bg-gradient-to-r from-purple-600 via-blue-600 to-navy-400 
+                            bg-[size:200%_auto] 
+                            hover:bg-[position:100%_center] 
+                    transition-all duration-500 ease-in-out disabled:bg-blue-400 disabled:cursor-not-allowed text-white rounded-full shadow-lg hover:bg-blue-700"
+        aria-label="Add new gist"
+      >
+        <Plus size={32} />
+      </motion.button>
+
+      <AddGistModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onAddGist={handleAddGist}
+      />
+    </div>
+  );
+}
