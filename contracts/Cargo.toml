@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = [
+    "gist-registry",
+    "multisig",
+    "governance",
+    "batch-wallet",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/meshmesh001/geomesh-protocol"
+license = "MIT"
+
+# IMPORTANT: do not reintroduce a [workspace.dev-dependencies] block here.
+# That construct is not valid Cargo syntax and is silently ignored at parse
+# time. Member crates must explicitly list `features = ["testutils"]`
+# on their own [dev-dependencies] soroban-sdk entry to enable testutils in
+# tests (see contracts/governance/Cargo.toml for the canonical pattern).
+# See geomesh-protocol PR discussion history for the [workspace.dev-dependencies]
+# root cause behind soroban-sdk 22 test-build failures.
+
+[workspace.dependencies]
+soroban-sdk = { version = "22.0.11", features = ["alloc"] }
+soroban-env-host = "=22.0.11"
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
+
+[profile.release-with-logs]
+inherits = "release"
+debug-assertions = true
