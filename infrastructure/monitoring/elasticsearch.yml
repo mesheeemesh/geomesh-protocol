@@ -1,0 +1,15 @@
+﻿# Elasticsearch configuration for geomesh-protocol centralized logging
+cluster.name: geomesh-protocol-logs
+node.name: geomesh-protocol-node-1
+network.host: 0.0.0.0
+http.port: 9200
+
+# Discovery
+discovery.type: single-node
+
+# Index settings
+indices.memory.index_buffer_size: 20%
+
+# Log retention via ILM (managed separately)
+# Default index: geomesh-protocol-logs-*
+# Retention: 30 days hot, 60 days warm, delete after 90 days
