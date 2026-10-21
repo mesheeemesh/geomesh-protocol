@@ -1,0 +1,37 @@
+uptime:
+  provider: betteruptime
+  check_interval: 60
+
+monitors:
+  - name: geomesh-protocol API Health
+    url: https://api.geomesh-protocol.com/health
+    method: GET
+    expected_status: 200
+    regions: [us-east, eu-west, ap-southeast]
+    alert_after: 2
+
+  - name: geomesh-protocol Frontend
+    url: https://geomesh-protocol.com
+    method: GET
+    expected_status: 200
+    regions: [us-east, eu-west]
+    alert_after: 2
+
+  - name: geomesh-protocol API Ping
+    url: https://api.geomesh-protocol.com/ping
+    method: GET
+    expected_status: 200
+    regions: [us-east]
+    alert_after: 1
+
+response_time_thresholds:
+  warning_ms: 1000
+  critical_ms: 3000
+
+status_page:
+  enabled: true
+  public_url: https://status.geomesh-protocol.com
+  components:
+    - API
+    - Frontend
+    - Database
