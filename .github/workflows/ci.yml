@@ -1,0 +1,167 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    # Skip the matrix when a PR touches only docs / templates so we don't
+    # burn CI minutes on changes that can't possibly break a build.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+      - CHANGELOG.md
+      - LICENSE
+      - CODE_OF_CONDUCT.md
+      - CONTRIBUTING.md
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+      - CHANGELOG.md
+      - LICENSE
+      - CODE_OF_CONDUCT.md
+      - CONTRIBUTING.md
+  schedule:
+    # Nightly full CI run keeps the app checks fresh even without pushes.
+    - cron: "30 2 * * *"
+
+# Cancel any previous in-progress run for the same ref so we don't burn
+# runner minutes on superseded pushes while a PR is iterating.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# All jobs only need to read the repo.
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: Contracts (Rust / Soroban)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy (deny warnings)
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: cargo check
+        run: cargo check --locked --workspace --all-targets
+
+      - name: cargo test
+        run: cargo test --locked --workspace
+
+      # Sanity check only: catches compile failures on the deploy target.
+      # Does NOT run `wasm-opt` — production Soroban artifacts come from
+      # `soroban contract build`, which adds the optimizer pass. Wire that
+      # in if CI artifacts ever become the release source.
+      # The workspace lockfile is enforced because Soroban 22's broad
+      # transitive version ranges can otherwise select incompatible majors.
+      - name: cargo build (wasm32 release)
+        run: cargo build --locked --workspace --target wasm32-unknown-unknown --release
+
+  contracts-audit:
+    name: Contracts Audit (cargo-deny / cargo-audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      # Scan for license conflicts, duplicate crate versions, and
+      # unmaintained/vulnerable dependencies.  The deny.toml config
+      # controls thresholds and allow-lists.
+      - name: cargo deny check
+        run: cargo deny check --show-stats
+
+      # Fetch the latest RustSec advisory database and compare against
+      # every crate in the workspace. Exits non-zero (fails the build)
+      # when any advisory is found.
+      #
+      # Ignored advisories:
+      #   RUSTSEC-2026-0009 — time v0.3.36 (DoS via stack exhaustion)
+      #     Cannot update: time-core >=0.1.8 requires edition2024 (Rust >=1.85),
+      #     but the contract-builder Docker image pins rust:1.84-slim.
+      #   RUSTSEC-2024-0388 — derivative v2.2.0 (unmaintained)
+      #   RUSTSEC-2024-0436 — paste v1.0.15 (unmaintained)
+      #     Cannot upgrade: transitive dependencies of the Soroban SDK.
+      - name: cargo audit
+        run: cargo audit --deny=warnings --ignore RUSTSEC-2026-0009 --ignore RUSTSEC-2024-0388 --ignore RUSTSEC-2024-0436
+
+  frontend:
+    uses: ./.github/workflows/node-matrix.yml
+    with:
+      app-name: Frontend (Next.js)
+      working-directory: Frontend
+      verification-command: npm run test
+
+  analytics:
+    uses: ./.github/workflows/node-matrix.yml
+    with:
+      app-name: Analytics (Next.js)
+      working-directory: analytics
+      verification-command: npm run typecheck
+
+  terraform-fmt:
+    name: Terraform fmt
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infrastructure/terraform
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      # No `terraform init` needed: `fmt -check` only inspects source files.
+      - name: terraform fmt -check
+        run: terraform fmt -check -recursive
